@@ -34,7 +34,7 @@ def login():
 
 
 root.title("登录系统")
-root.geometry("300x180")
+root.geometry("500x240")
 
 label_user = Label(root, text="用户名:")
 label_user.pack(pady=5)
