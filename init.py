@@ -1,12 +1,14 @@
 import sqlite3
-import tkinter
+
+DB_PATH = "database.db"
+
 #####################
 #   图书馆管理系统   #
 #####################
 def init_db():
-    conn = sqlite3.connect('database.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()  # 连接到数据库
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admin (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,12 +16,14 @@ def init_db():
             password TEXT NOT NULL,
             email TEXT UNIQUE
         )
-    ''' ) # 创建管理员表
+    ''')  # 创建管理员表
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT NOT NULL,
             password TEXT NOT NULL,
+            gender TEXT,
             user_type TEXT DEFAULT 'student',
             email TEXT UNIQUE,
             borrowed_count INTEGER DEFAULT 0,
@@ -58,7 +62,7 @@ def init_db():
             borrowable INTEGER DEFAULT 1,
             FOREIGN KEY (book_id) REFERENCES books(id)
         )
-    ''') # 创建图书副本表
+    ''')  # 创建图书副本表
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS borrows (
@@ -86,19 +90,20 @@ def init_db():
     ''')  # 创建预约表
 
     cursor.execute('''
-            CREATE TABLE IF NOT EXISTS reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id BIGINT,
-                book_id INTEGER,
-                rating INTEGER CHECK(rating >= 1 AND rating <= 5),
-                comment TEXT DEFAULT 'GOOD!',
-                review_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (book_id) REFERENCES books(id)
-            )
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id BIGINT,
+            book_id INTEGER,
+            rating INTEGER CHECK(rating >= 1 AND rating <= 5),
+            comment TEXT DEFAULT 'GOOD!',
+            review_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (book_id) REFERENCES books(id)
+        )
     ''')
 
     conn.commit()
     conn.close()
 
-init_db()
+if __name__ == "__main__":
+    init_db()

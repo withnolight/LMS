@@ -3,7 +3,7 @@ import random
 import string
 from datetime import datetime, timedelta
 
-DB = "database.db"
+from init import DB_PATH
 
 def random_text(n=8):
     return ''.join(random.choices(string.ascii_letters, k=n))
@@ -15,7 +15,7 @@ def random_chinese(n=4):
     return ''.join(chr(random.randint(0x4e00, 0x9fa5)) for _ in range(n))
 
 def fill_test_data():
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     # ---------------------------
