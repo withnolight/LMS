@@ -6,7 +6,7 @@ import time
 from email.mime.text import MIMEText
 from email.header import Header
 
-DB = "database.db"
+from init import DB_PATH
 
 
 #########################
@@ -40,22 +40,21 @@ def send_email(to, subject, content):
 def create_indexes():
     print("⏳ 建立高频访问索引...")
 
-    conn = sqlite3.connect(DB)
-    cursor = conn.cursor()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
 
-    # 索引示例：按需修改
-    indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)",
-        "CREATE INDEX IF NOT EXISTS idx_borrows_user ON borrows(user_id)",
-        "CREATE INDEX IF NOT EXISTS idx_borrows_copy ON borrows(copy_id)",
-        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
-    ]
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)",
+            "CREATE INDEX IF NOT EXISTS idx_borrows_user ON borrows(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_borrows_copy ON borrows(copy_id)",
+            "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
+        ]
 
-    for sql in indexes:
-        cursor.execute(sql)
+        for sql in indexes:
+            cursor.execute(sql)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+
     print("✅ 索引任务完成")
 
 
@@ -65,22 +64,20 @@ def create_indexes():
 def send_overdue_emails():
     print("⏳ 检查并发送超期借阅邮件...")
 
-    conn = sqlite3.connect(DB)
-    cursor = conn.cursor()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
 
-    # 超过 30 天且未归还 borrowed.returned = 0
-    cursor.execute("""
-        SELECT borrows.user_id, users.email, borrows.borrow_time, copies.book_id, books.title
-        FROM borrows
-        JOIN users ON borrows.user_id = users.id
-        JOIN copies ON borrows.copy_id = copies.id
-        JOIN books ON copies.book_id = books.id
-        WHERE borrows.returned = 0
-          AND DATE(borrows.borrow_time) <= DATE('now', '-30 days');
-    """)
+        cursor.execute("""
+            SELECT borrows.user_id, users.email, borrows.borrow_time, copies.book_id, books.title
+            FROM borrows
+            JOIN users ON borrows.user_id = users.id
+            JOIN copies ON borrows.copy_id = copies.id
+            JOIN books ON copies.book_id = books.id
+            WHERE borrows.returned = 0
+              AND DATE(borrows.borrow_time) <= DATE('now', '-30 days');
+        """)
 
-    overdue_records = cursor.fetchall()
-    conn.close()
+        overdue_records = cursor.fetchall()
 
     for user_id, email, borrow_time, book_id, title in overdue_records:
         if not email:
@@ -101,15 +98,16 @@ def send_overdue_emails():
 ###################
 #   注册定时任务   #
 ###################
-schedule.every().day.at("04:00").do(create_indexes)
-schedule.every().day.at("08:00").do(send_overdue_emails)
+if __name__ == "__main__":
+    schedule.every().day.at("04:00").do(create_indexes)
+    schedule.every().day.at("08:00").do(send_overdue_emails)
 
-print("📌 定时任务已启动...")
-print("  每天 04:00 → 构建索引")
-print("  每天 08:00 → 发送超期邮件")
-print("保持脚本运行即可。")
+    print("📌 定时任务已启动...")
+    print("  每天 04:00 → 构建索引")
+    print("  每天 08:00 → 发送超期邮件")
+    print("保持脚本运行即可。")
 
-# 持续运行（最好用 screen / systemd 托管）
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+    # 持续运行（最好用 screen / systemd 托管）
+    while True:
+        schedule.run_pending()
+        time.sleep(60)

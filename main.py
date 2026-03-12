@@ -1,14 +1,25 @@
-import ctypes
+import sys
 import sqlite3
 import tkinter as tk
+import tkinter.font as tkFont
 from tkinter import messagebox
 import datetime
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 
-def adjust_treeview_column_widths(tree, min_padding=50):
-    import tkinter.font as tkFont
+from init import DB_PATH
 
+
+# --------------- 通用工具函数 ---------------
+
+def get_connection():
+    """获取数据库连接（启用外键约束）"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def adjust_treeview_column_widths(tree, min_padding=50):
     columns = tree["columns"]
     font = tkFont.Font(font=("Microsoft YaHei", 11))
 
@@ -22,6 +33,15 @@ def adjust_treeview_column_widths(tree, min_padding=50):
                 max_width = width
 
         tree.column(col, width=max_width + min_padding)
+
+
+def refresh_treeview(tree, rows):
+    """清空并重新填充 Treeview"""
+    for item in tree.get_children():
+        tree.delete(item)
+    for row in rows:
+        tree.insert("", END, values=row)
+    adjust_treeview_column_widths(tree)
 
 def book_query():
     win = ttk.Toplevel()
@@ -51,27 +71,18 @@ def book_query():
 
 def search_books(query, tree):
     """根据查询条件搜索书籍并更新树视图"""
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT books.id, books.title, books.author, books.publisher, books.year,
+                   books.isbn, categories.name AS category, books.copies
+            FROM books
+            LEFT JOIN categories ON books.category_id = categories.id
+            WHERE books.title LIKE ? OR books.author LIKE ? OR books.isbn LIKE ?
+        """, (f"%{query}%", f"%{query}%", f"%{query}%"))
+        results = cursor.fetchall()
 
-    cursor.execute("""
-        SELECT books.id, books.title, books.author, books.publisher, books.year,
-               books.isbn, categories.name AS category, books.copies
-        FROM books
-        LEFT JOIN categories ON books.category_id = categories.id
-        WHERE books.title LIKE ? OR books.author LIKE ? OR books.isbn LIKE ?
-    """, (f"%{query}%", f"%{query}%", f"%{query}%"))
-
-    results = cursor.fetchall()
-    conn.close()
-
-    for item in tree.get_children():
-        tree.delete(item)
-
-    for row in results:
-        tree.insert("", END, values=row)
-    
-    adjust_treeview_column_widths(tree)
+    refresh_treeview(tree, results)
 
 def borrow_query():
     win = ttk.Toplevel()
@@ -101,28 +112,19 @@ def borrow_query():
 
 def search_borrows(query, tree):
     """根据查询条件搜索借阅记录并更新树视图"""
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT borrows.id, borrows.user_id, books.title, borrows.copy_id,
+                   borrows.borrow_time, borrows.return_date, borrows.returned
+            FROM borrows
+            LEFT JOIN copies ON borrows.copy_id = copies.id
+            LEFT JOIN books  ON copies.book_id = books.id
+            WHERE borrows.user_id LIKE ? OR books.title LIKE ?
+        """, (f"%{query}%", f"%{query}%"))
+        results = cursor.fetchall()
 
-    cursor.execute("""
-        SELECT borrows.id, borrows.user_id, books.title, borrows.copy_id,
-               borrows.borrow_time, borrows.return_date, borrows.returned
-        FROM borrows
-        LEFT JOIN copies ON borrows.copy_id = copies.id
-        LEFT JOIN books  ON copies.book_id = books.id
-        WHERE borrows.user_id LIKE ? OR books.title LIKE ?
-    """, (f"%{query}%", f"%{query}%"))
-
-    results = cursor.fetchall()
-    conn.close()
-
-    for item in tree.get_children():
-        tree.delete(item)
-
-    for row in results:
-        tree.insert("", END, values=row)
-
-    adjust_treeview_column_widths(tree)
+    refresh_treeview(tree, results)
 
 def book_borrow():
     win = ttk.Toplevel()
@@ -147,46 +149,42 @@ def book_borrow():
     button.grid(row=2, column=0, columnspan=2, pady=20)
 
 def execute_borrow(user_id, book_id):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT status, borrowable FROM copies WHERE id=?", (book_id,))
-    result01 = cursor.fetchone()
-    cursor.execute("SELECT maxborrow, borrowed_count FROM users WHERE id=?", (user_id,))
-    result02 = cursor.fetchone()
+        cursor.execute("SELECT status, borrowable FROM copies WHERE id=?", (book_id,))
+        copy_info = cursor.fetchone()
+        cursor.execute("SELECT maxborrow, borrowed_count FROM users WHERE id=?", (user_id,))
+        user_info = cursor.fetchone()
 
-    result = result01 and (result02[1] < result02[0])
-
-    if not result:
-        if not result02:
-            messagebox.showerror("错误", "读者ID不存在或已达借书上限！")
-        else:
+        if not user_info:
+            messagebox.showerror("错误", "读者ID不存在！")
+            return
+        if not copy_info:
             messagebox.showerror("错误", "副本ID不存在！")
-    else:
-        status, borrowable = result01
+            return
+        if user_info[1] >= user_info[0]:
+            messagebox.showerror("错误", "该读者已达借书上限！")
+            return
+
+        status, borrowable = copy_info
         if status != 'available' or borrowable == 0:
             messagebox.showerror("错误", "该副本不可借！")
-        else:
-            cursor.execute("""
-                INSERT INTO borrows (user_id, copy_id)
-                VALUES (?, ?)
-            """, (user_id, book_id))
+            return
 
-            cursor.execute("""
-                UPDATE copies
-                SET status='borrowed'
-                WHERE id=?
-            """, (book_id,))
-            cursor.execute("""
-                UPDATE users
-                SET borrowed_count = borrowed_count + 1
-                WHERE id=?
-            """, (user_id,))
+        cursor.execute("""
+            INSERT INTO borrows (user_id, copy_id)
+            VALUES (?, ?)
+        """, (user_id, book_id))
+        cursor.execute("""
+            UPDATE copies SET status='borrowed' WHERE id=?
+        """, (book_id,))
+        cursor.execute("""
+            UPDATE users SET borrowed_count = borrowed_count + 1 WHERE id=?
+        """, (user_id,))
 
-            conn.commit()
-            messagebox.showinfo("成功", "借书成功！")
-
-    conn.close()
+        conn.commit()
+        messagebox.showinfo("成功", "借书成功！")
 
 def book_return():
     win = ttk.Toplevel()
@@ -211,42 +209,32 @@ def book_return():
     button.grid(row=2, column=0, columnspan=2, pady=20)
 
 def execute_return(user_id, book_id):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT id FROM borrows
-        WHERE user_id=? AND copy_id=? AND returned=0
-    """, (user_id, book_id))
-    borrow_record = cursor.fetchone()
+        cursor.execute("""
+            SELECT id FROM borrows
+            WHERE user_id=? AND copy_id=? AND returned=0
+        """, (user_id, book_id))
+        borrow_record = cursor.fetchone()
 
-    if not borrow_record:
-        messagebox.showerror("错误", "无效的借阅记录或该书已归还！")
-    else:
+        if not borrow_record:
+            messagebox.showerror("错误", "无效的借阅记录或该书已归还！")
+            return
+
         borrow_id = borrow_record[0]
-
         cursor.execute("""
-            UPDATE borrows
-            SET returned=1, return_date=CURRENT_TIMESTAMP
-            WHERE id=?
+            UPDATE borrows SET returned=1, return_date=CURRENT_TIMESTAMP WHERE id=?
         """, (borrow_id,))
-
         cursor.execute("""
-            UPDATE copies
-            SET status='available'
-            WHERE id=?
+            UPDATE copies SET status='available' WHERE id=?
         """, (book_id,))
-
         cursor.execute("""
-            UPDATE users
-            SET borrowed_count = borrowed_count - 1
-            WHERE id=?
+            UPDATE users SET borrowed_count = borrowed_count - 1 WHERE id=?
         """, (user_id,))
 
         conn.commit()
         messagebox.showinfo("成功", "还书成功！")
-
-    conn.close()
 
 def book_add():
     win = ttk.Toplevel()
@@ -309,26 +297,29 @@ def book_add():
     button.pack(side=LEFT, padx=10)
 
 def execute_add_book(title, author, publisher, year, isbn, description, category_id, copies, borrowable):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, copies FROM books WHERE isbn=?", (isbn,))
-    result = cursor.fetchone()
-    if result:
-        book_id, current_copies = result
-        new_copies = current_copies + int(copies)
-        cursor.execute("UPDATE books SET copies=? WHERE id=?", (new_copies, book_id))
-        for i in range(int(copies)):
-            cursor.execute("INSERT INTO copies (book_id, status, location, borrowable) VALUES (?, 'available', '默认位置', ?)", (book_id, borrowable))
-    else:
-        cursor.execute("""
-            INSERT INTO books (title, author, publisher, year, description, category_id, isbn, copies)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (title, author, publisher, year, description, category_id, isbn, copies))
-        book_id = cursor.lastrowid
-        for i in range(int(copies)):
-            cursor.execute("INSERT INTO copies (book_id, status, location, borrowable) VALUES (?, 'available', '默认位置', ?)", (book_id, borrowable))
-    conn.commit()
-    conn.close()
+    num_copies = int(copies)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, copies FROM books WHERE isbn=?", (isbn,))
+        result = cursor.fetchone()
+
+        if result:
+            book_id, current_copies = result
+            cursor.execute("UPDATE books SET copies=? WHERE id=?",
+                           (current_copies + num_copies, book_id))
+        else:
+            cursor.execute("""
+                INSERT INTO books (title, author, publisher, year, description, category_id, isbn, copies)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (title, author, publisher, year, description, category_id, isbn, num_copies))
+            book_id = cursor.lastrowid
+
+        for _ in range(num_copies):
+            cursor.execute(
+                "INSERT INTO copies (book_id, status, location, borrowable) VALUES (?, 'available', '默认位置', ?)",
+                (book_id, borrowable))
+
+        conn.commit()
     messagebox.showinfo("成功", "书籍新增成功！")
 
 def book_damage():
@@ -349,50 +340,45 @@ def book_damage():
     button.grid(row=1, column=0, columnspan=2, pady=10)
 
 def marked_as_damaged(copy_id):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT status FROM copies WHERE id=?", (copy_id,))
-    result = cursor.fetchone()
+        cursor.execute("SELECT status FROM copies WHERE id=?", (copy_id,))
+        result = cursor.fetchone()
 
-    if not result:
-        messagebox.showerror("错误", "副本ID不存在！")
-    else:
+        if not result:
+            messagebox.showerror("错误", "副本ID不存在！")
+            return
+
         status = result[0]
         if status == 'damaged':
             messagebox.showinfo("提示", "该副本已标记为报损！")
-        else:
-            if status == 'borrowed':
-                cursor.execute("""
-                    SELECT user_id FROM borrows
-                    WHERE copy_id=? AND returned=0
-                """, (copy_id,))
-                borrow_record = cursor.fetchone()
-                if borrow_record:
-                    user_id = borrow_record[0]
-                    cursor.execute("""
-                        UPDATE users
-                        SET borrowed_count = borrowed_count - 1
-                        WHERE id=?
-                    """, (user_id,))
+            return
+
+        if status == 'borrowed':
             cursor.execute("""
-                UPDATE copies
-                SET status='damaged', borrowable=0
-                WHERE id=?
-            """, (copy_id,))
-            cursor.execute("""
-                UPDATE books
-                SET copies = copies - 1
-                WHERE id = (SELECT book_id FROM copies WHERE id=?)
-            """, (copy_id,))
-            cursor.execute("""
-                DELETE FROM borrows
+                SELECT user_id FROM borrows
                 WHERE copy_id=? AND returned=0
             """, (copy_id,))
-            conn.commit()
-            messagebox.showinfo("成功", "副本已标记为报损！")
+            borrow_record = cursor.fetchone()
+            if borrow_record:
+                cursor.execute("""
+                    UPDATE users SET borrowed_count = borrowed_count - 1 WHERE id=?
+                """, (borrow_record[0],))
 
-    conn.close()
+        cursor.execute("""
+            UPDATE copies SET status='damaged', borrowable=0 WHERE id=?
+        """, (copy_id,))
+        cursor.execute("""
+            UPDATE books SET copies = copies - 1
+            WHERE id = (SELECT book_id FROM copies WHERE id=?)
+        """, (copy_id,))
+        cursor.execute("""
+            DELETE FROM borrows WHERE copy_id=? AND returned=0
+        """, (copy_id,))
+
+        conn.commit()
+        messagebox.showinfo("成功", "副本已标记为报损！")
 
 def user_management():
     win = ttk.Toplevel()
@@ -478,55 +464,48 @@ def user_management():
 
 def search_users(query, tree):
     """根据查询条件搜索读者并更新树视图"""
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, username, user_type, email, borrowed_count, maxborrow
-        FROM users
-        WHERE id LIKE ? OR username LIKE ?
-    """, (f"%{query}%", f"%{query}%"))
-    results = cursor.fetchall()
-    conn.close()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, user_type, email, borrowed_count, maxborrow
+            FROM users
+            WHERE id LIKE ? OR username LIKE ?
+        """, (f"%{query}%", f"%{query}%"))
+        results = cursor.fetchall()
 
-    for item in tree.get_children():
-        tree.delete(item)
-
-    for row in results:
-        tree.insert("", END, values=row)
-    
-    adjust_treeview_column_widths(tree)
+    refresh_treeview(tree, results)
 
 def add_user(user_id, username, password, user_type, email):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO users (id, username, password, user_type, email, maxborrow) VALUES (?, ?, ?, ?, ?, ?)",
-                       (user_id, username, password, user_type, email, 3 if user_type == 'student' else 10))
-        conn.commit()
-        messagebox.showinfo("成功", "读者新增成功！")
-    except sqlite3.IntegrityError:
-        messagebox.showerror("错误", "读者ID已存在或其他信息有误！")
-    conn.close()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO users (id, username, password, user_type, email, maxborrow) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, username, password, user_type, email, 3 if user_type == 'student' else 10))
+            conn.commit()
+            messagebox.showinfo("成功", "读者新增成功！")
+        except sqlite3.IntegrityError:
+            messagebox.showerror("错误", "读者ID已存在或其他信息有误！")
 
 def delete_user(user_id):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT borrowed_count FROM users WHERE id=?", (user_id,))
-    result = cursor.fetchone()
-    if not result:
-        messagebox.showerror("错误", "读者ID不存在！")
-    elif result[0] > 0:
-        messagebox.showerror("错误", "该读者有未归还的书籍，无法删除！")
-    else:
-        cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
-        conn.commit()
-        messagebox.showinfo("成功", "读者删除成功！")
-    conn.close()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT borrowed_count FROM users WHERE id=?", (user_id,))
+        result = cursor.fetchone()
+        if not result:
+            messagebox.showerror("错误", "读者ID不存在！")
+        elif result[0] > 0:
+            messagebox.showerror("错误", "该读者有未归还的书籍，无法删除！")
+        else:
+            cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
+            conn.commit()
+            messagebox.showinfo("成功", "读者删除成功！")
 
-def quit_application():
+def quit_application(root):
     answer = messagebox.askyesno("退出登录", "确定要退出登录吗？")
     if answer:
-        tk._exit(0)
+        root.destroy()
+        sys.exit(0)
 
 def update_clock(label):
     """实时更新时钟"""
@@ -541,12 +520,10 @@ def create_main_window(username):
 
     ttk.Label(root, text=f"当前登录用户：{username}", font=("Microsoft YaHei", 14)).pack(pady=15)
 
-    bookcount = 0
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM books")
-    bookcount = cursor.fetchone()[0]
-    conn.close()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM books")
+        bookcount = cursor.fetchone()[0]
 
     ttk.Label(root, text=f"系统共有书籍数量：{bookcount}", font=("Microsoft YaHei", 12)).pack(pady=10)
 
@@ -558,21 +535,21 @@ def create_main_window(username):
     button_frame.pack(pady=30, padx=20, fill=BOTH, expand=True)
 
     ttk.Button(button_frame, text="查询书籍状态", width=25, bootstyle="info",
-               command=lambda: book_query()).pack(pady=5, fill=X)
+               command=book_query).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="查询借阅记录", width=25, bootstyle="info",
-               command=lambda: borrow_query()).pack(pady=5, fill=X)
+               command=borrow_query).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="借书", width=25, bootstyle="success",
-               command=lambda: book_borrow()).pack(pady=5, fill=X)
+               command=book_borrow).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="还书", width=25, bootstyle="warning",
-               command=lambda: book_return()).pack(pady=5, fill=X)
+               command=book_return).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="新增书籍", width=25, bootstyle="success",
-               command=lambda: book_add()).pack(pady=5, fill=X)
+               command=book_add).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="书籍报损", width=25, bootstyle="danger",
-               command=lambda: book_damage()).pack(pady=5, fill=X)
+               command=book_damage).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="读者管理", width=25, bootstyle="primary",
-               command=lambda: user_management()).pack(pady=5, fill=X)
+               command=user_management).pack(pady=5, fill=X)
     ttk.Button(button_frame, text="退出登录", width=25, bootstyle="danger-outline",
-               command=lambda: quit_application()).pack(pady=5, fill=X)
+               command=lambda: quit_application(root)).pack(pady=5, fill=X)
     root.mainloop()
 
 if __name__ == "__main__":

@@ -1,23 +1,29 @@
 import sqlite3
+import sys
 from tkinter import *
 from tkinter import messagebox
 from tkinter.ttk import *
-import ctypes
+
+from init import DB_PATH
 
 root = Tk()
-ctypes.windll.shcore.SetProcessDpiAwareness(1)
-ScaleFactor = ctypes.windll.shcore.GetScaleFactorForDevice(0)
-root.tk.call('tk',"scaling", ScaleFactor/75)
+
+# Windows DPI 适配（仅在 Windows 上生效）
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        ScaleFactor = ctypes.windll.shcore.GetScaleFactorForDevice(0)
+        root.tk.call('tk', "scaling", ScaleFactor / 75)
+    except Exception:
+        pass
 
 def check_login(username, password):
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM admin WHERE name=? AND password=?", 
-                   (username, password))
-    result = cursor.fetchone()
-
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM admin WHERE name=? AND password=?",
+                       (username, password))
+        result = cursor.fetchone()
     return result is not None
 
 
